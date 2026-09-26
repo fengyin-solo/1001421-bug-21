@@ -1,9 +1,11 @@
 """巡查任务接口：维护巡查单，覆盖派发巡查、提交结果、作废巡查等动作。"""
 from __future__ import annotations
 
-from typing import Any
+import csv
+import io
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from app.schemas import ActionResult, EntryPayload, PageResult
 from app.services.patrol import PatrolService
@@ -14,20 +16,45 @@ service = PatrolService()
 
 LIST_FIELDS = ["巡查单号", "巡查路线", "巡查人员", "巡查日期", "巡查里程", "发现问题数", "巡查时长", "巡查状态"]
 STATUSES = ["待派发", "巡查中", "已提交", "已作废"]
+EXPORT_SIZE = 10000
+EXPORT_FILENAME = "巡查任务清单.csv"
 
 
 @router.get("", response_model=PageResult[dict])
 def list_entries(
     keyword: str | None = Query(default=None, description="按巡查单号检索"),
+    route: str | None = Query(default=None, description="按巡查路线检索"),
+    person: str | None = Query(default=None, description="按巡查人员检索"),
     status: str | None = Query(default=None, description="待派发、巡查中、已提交、已作废"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按巡查单号与状态过滤巡查任务列表；没有数据时返回空页，不报错。"""
+    """按巡查单号、路线、人员与状态过滤巡查任务列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    items, total = service.list_entries(keyword=keyword, route=route, person=person, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries(
+    keyword: str | None = Query(default=None, description="按巡查单号检索"),
+    route: str | None = Query(default=None, description="按巡查路线检索"),
+    person: str | None = Query(default=None, description="按巡查人员检索"),
+    status: str | None = Query(default=None, description="待派发、巡查中、已提交、已作废"),
+) -> Response:
+    """导出巡查任务清单：取数口径与列表完全一致；没有可导出的记录时给出说明而不是空文件。"""
+    items, _ = service.list_entries(keyword=keyword, route=route, person=person, status=status, page=1, size=EXPORT_SIZE)
+    if not items:
+        raise HTTPException(status_code=404, detail="当前筛选条件下没有可导出的巡查记录，请调整筛选条件后再试")
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer.writerow(LIST_FIELDS)
+    for row in items:
+        writer.writerow(["" if row.get(field) is None else str(row.get(field)) for field in LIST_FIELDS])
+    content = buffer.getvalue().encode("utf-8-sig")
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(EXPORT_FILENAME)}"}
+    return Response(content=content, media_type="text/csv; charset=utf-8", headers=headers)
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +83,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出巡查任务清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "patrol", "total": total, "items": items}

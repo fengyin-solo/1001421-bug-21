@@ -23,6 +23,13 @@
         <span>{{ field }}</span>
         <input v-model="filters[field]" :placeholder="`按${field}检索`" />
       </label>
+      <label class="filter-item">
+        <span>巡查状态</span>
+        <select v-model="statusFilter">
+          <option value="">全部状态</option>
+          <option v-for="item in statuses" :key="item" :value="item">{{ item }}</option>
+        </select>
+      </label>
       <button class="btn" type="submit">查询</button>
       <button class="btn ghost" type="button" @click="resetFilters">重置条件</button>
     </form>
@@ -79,15 +86,54 @@ const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
+const statusFilter = ref('')
 const filterFields = columns.slice(0, 3)
+
+function buildQuery() {
+  const params = new URLSearchParams()
+  const keyword = (filters.value['巡查单号'] ?? '').trim()
+  const route = (filters.value['巡查路线'] ?? '').trim()
+  const person = (filters.value['巡查人员'] ?? '').trim()
+  if (keyword) params.set('keyword', keyword)
+  if (route) params.set('route', route)
+  if (person) params.set('person', person)
+  if (statusFilter.value) params.set('status', statusFilter.value)
+  return params.toString()
+}
 
 function resetFilters() {
   filters.value = {}
+  statusFilter.value = ''
   void reload()
 }
 
-function exportRows() {
-  window.open(`${ENDPOINT}/export`, '_blank')
+async function exportRows() {
+  errorMessage.value = ''
+  const query = buildQuery()
+  try {
+    const response = await request(`${ENDPOINT}/export?${query}`)
+    if (!response.ok) {
+      let detail = '巡查任务清单导出失败，请稍后重试'
+      try {
+        const payload = await response.json()
+        if (typeof payload?.detail === 'string') detail = payload.detail
+      } catch {
+        // 错误响应不是 JSON 时保留默认提示
+      }
+      throw new Error(detail)
+    }
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = '巡查任务清单.csv'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '巡查任务清单导出失败，请稍后重试'
+  }
 }
 
 function openCreate() {
@@ -112,7 +158,7 @@ async function runAction(action: string, row: Row) {
 
 async function reload() {
   errorMessage.value = ''
-  const query = new URLSearchParams(filters.value as Record<string, string>).toString()
+  const query = buildQuery()
   try {
     const response = await request(`${ENDPOINT}?${query}`)
     if (!response.ok) {

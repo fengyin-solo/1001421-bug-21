@@ -17,6 +17,8 @@ class PatrolService:
         self,
         *,
         keyword: str | None = None,
+        route: str | None = None,
+        person: str | None = None,
         status: str | None = None,
         page: int = 1,
         size: int = 20,
@@ -24,6 +26,10 @@ class PatrolService:
         rows = store.rows(MODULE)
         if keyword:
             rows = [row for row in rows if keyword in str(row.get("巡查单号", ""))]
+        if route:
+            rows = [row for row in rows if route in str(row.get("巡查路线", ""))]
+        if person:
+            rows = [row for row in rows if person in str(row.get("巡查人员", ""))]
         if status:
             rows = [row for row in rows if row.get("status") == status]
         total = len(rows)
