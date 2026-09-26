@@ -10,22 +10,46 @@ REQUIRED_FIELDS = ["巡查单号", "巡查路线", "巡查人员"]
 STATUS_ORDER = ["待派发", "巡查中", "已提交", "已作废"]
 ACTION_RULES = {"派发巡查": "巡查中", "提交结果": "已提交", "作废巡查": "已作废"}
 NEGATIVE_ACTIONS = ["作废巡查"]
+# 已作废的巡查单不进入工作台口径：列表与导出共用这一约束
+CANCELLED_STATUS = STATUS_ORDER[-1]
 
 
 class PatrolService:
+    def _query_rows(
+        self,
+        *,
+        keyword: str | None = None,
+        route: str | None = None,
+        person: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """列表与导出唯一的取数口径：同样的过滤条件必然得到同样的数据。
+
+        已作废的巡查单一律剔除；结果按 id 排序，保证重复查询/导出结果稳定。
+        """
+        rows = [row for row in store.rows(MODULE) if row.get("status") != CANCELLED_STATUS]
+        if keyword:
+            rows = [row for row in rows if keyword in str(row.get("巡查单号", ""))]
+        if route:
+            rows = [row for row in rows if route in str(row.get("巡查路线", ""))]
+        if person:
+            rows = [row for row in rows if person in str(row.get("巡查人员", ""))]
+        if status:
+            rows = [row for row in rows if row.get("status") == status]
+        rows.sort(key=lambda row: int(row.get("id", 0)))
+        return rows
+
     def list_entries(
         self,
         *,
         keyword: str | None = None,
+        route: str | None = None,
+        person: str | None = None,
         status: str | None = None,
         page: int = 1,
         size: int = 20,
     ) -> tuple[list[dict[str, Any]], int]:
-        rows = store.rows(MODULE)
-        if keyword:
-            rows = [row for row in rows if keyword in str(row.get("巡查单号", ""))]
-        if status:
-            rows = [row for row in rows if row.get("status") == status]
+        rows = self._query_rows(keyword=keyword, route=route, person=person, status=status)
         total = len(rows)
         start = max(page - 1, 0) * size
         return rows[start:start + size], total

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
 from app.services.patrol import PatrolService
@@ -16,18 +16,46 @@ LIST_FIELDS = ["巡查单号", "巡查路线", "巡查人员", "巡查日期", "
 STATUSES = ["待派发", "巡查中", "已提交", "已作废"]
 
 
+def list_filters(
+    keyword: str | None = Query(default=None, description="按巡查单号检索"),
+    route: str | None = Query(default=None, description="按巡查路线检索"),
+    person: str | None = Query(default=None, description="按巡查人员检索"),
+    status: str | None = Query(default=None, description="待派发、巡查中、已提交；已作废的巡查单不进入列表与导出"),
+) -> dict[str, str | None]:
+    """列表与导出共用的过滤条件，保证两个入口的口径始终一致。"""
+    return {"keyword": keyword, "route": route, "person": person, "status": status}
+
+
 @router.get("", response_model=PageResult[dict])
 def list_entries(
-    keyword: str | None = Query(default=None, description="按巡查单号检索"),
-    status: str | None = Query(default=None, description="待派发、巡查中、已提交、已作废"),
+    filters: dict[str, Any] = Depends(list_filters),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按巡查单号与状态过滤巡查任务列表；没有数据时返回空页，不报错。"""
+    """按巡查单号、路线、人员与状态过滤巡查任务列表；没有数据时返回空页，不报错。
+
+    已作废的巡查单不进入工作台口径，任何过滤条件下都不会出现。
+    """
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    items, total = service.list_entries(page=page, size=size, **filters)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries(filters: dict[str, Any] = Depends(list_filters)) -> dict[str, Any]:
+    """导出巡查任务清单：取数口径与列表完全一致。
+
+    共用同一套过滤条件并排除已作废巡查单；当前条件下没有可导出内容时，
+    返回 409 与可读说明，而不是交付一份空文件。
+    """
+    items, total = service.list_entries(page=1, size=10000, **filters)
+    if total == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="当前筛选条件下没有可导出的巡查任务（已作废的巡查单不参与导出），请调整条件后再试",
+        )
+    return {"module": "patrol", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +84,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出巡查任务清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "patrol", "total": total, "items": items}
